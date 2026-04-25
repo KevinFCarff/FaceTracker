@@ -113,6 +113,30 @@ def save_groups_to_csv(filename="face_landmark_groups.csv"):
             writer.writerow([group_name, ','.join(map(str, sorted(points)))])
     print(f"Groups saved to {filename}")
 
+def load_groups_from_csv(filename="face_landmark_groups.csv"):
+    """Load groups from a CSV file and return as dictionary."""
+    groups = {}
+    try:
+        with open(filename, 'r') as csvfile:
+            reader = csv.reader(csvfile)
+            next(reader, None)  # Skip header
+            for row in reader:
+                if len(row) >= 2:
+                    group_name = row[0].strip()
+                    try:
+                        points = [int(x.strip()) for x in row[1].split(',') if x.strip()]
+                        groups[group_name] = points
+                    except ValueError:
+                        print(f"Warning: Invalid point indices for group '{group_name}': {row[1]}")
+        print(f"Loaded {len(groups)} groups from {filename}")
+        return groups
+    except FileNotFoundError:
+        print(f"Warning: Groups file {filename} not found")
+        return {}
+    except Exception as e:
+        print(f"Error loading groups from {filename}: {e}")
+        return {}
+
 def draw_labeling_ui(image):
     """Draw the labeling mode UI elements on the image."""
     h, w = image.shape[:2]
@@ -379,8 +403,8 @@ def visualize(image, detection_result, track_features, custom_points=None, label
             # Filter landmarks based on selected features
             selected_indices = set()
             
-            if 'custom' in track_features and custom_points:
-                # Use custom points
+            if ('custom' in track_features or 'groups' in track_features) and custom_points:
+                # Use custom points (either specified directly or loaded from groups)
                 selected_indices = set(custom_points)
             else:
                 # Use predefined feature groups
@@ -495,21 +519,18 @@ def main():
     # Declare global variables that will be modified
     global LABELING_MODE, CURRENT_GROUP_NAME, SELECTED_POINTS, GROUPS, TEXT_INPUT_MODE
     
+    # Initialize local variables
+    selected_groups = None
+    
     parser = argparse.ArgumentParser(description='Real-time face tracking with MediaPipe')
     parser.add_argument('-r', '--resolution', type=str, default='640x480', 
                         help='Camera resolution in WIDTHxHEIGHT format (e.g., 640x480, 1280x720)')
-    parser.add_argument('-e', '--track-eyes', action='store_true', help='Track eye landmarks')
-    parser.add_argument('-b', '--track-eyeballs', action='store_true', help='Track eyeball/iris landmarks')
-    parser.add_argument('-w', '--track-eyebrows', action='store_true', help='Track eyebrow landmarks')
-    parser.add_argument('-m', '--track-mouth', action='store_true', help='Track mouth landmarks')
-    parser.add_argument('-n', '--track-nose', action='store_true', help='Track nose landmarks')
-    parser.add_argument('-c', '--track-cheeks', action='store_true', help='Track cheek landmarks')
-    parser.add_argument('-o', '--track-face-outline', action='store_true', help='Track face outline landmarks')
     parser.add_argument('-a', '--track-all', action='store_true', help='Track all landmarks (default if no specific features selected)')
     parser.add_argument('-l', '--label-points', action='store_true', help='Show landmark index numbers next to points')
     parser.add_argument('-p', '--points', type=str, help='Comma-separated list of specific landmark indices to track (e.g., "1,2,3,4,5")')
     parser.add_argument('-i', '--hover-info', action='store_true', help='Show landmark index when hovering over points with mouse')
     parser.add_argument('-g', '--labeling-mode', action='store_true', help='Enable labeling mode for creating custom point groups')
+    parser.add_argument('-G', '--groups', type=str, help='Load and track specific groups from CSV file (comma-separated, e.g., "Eyes,Mouth,Nose")')
     
     args = parser.parse_args()
     
@@ -522,20 +543,6 @@ def main():
     
     # Determine which features to track
     track_features = []
-    if args.track_eyes:
-        track_features.append('eyes')
-    if args.track_eyeballs:
-        track_features.append('eyeballs')
-    if args.track_eyebrows:
-        track_features.append('eyebrows')
-    if args.track_mouth:
-        track_features.append('mouth')
-    if args.track_nose:
-        track_features.append('nose')
-    if args.track_cheeks:
-        track_features.append('cheeks')
-    if args.track_face_outline:
-        track_features.append('face_outline')
     
     # Handle custom points
     custom_points = None
@@ -546,6 +553,34 @@ def main():
         except ValueError:
             print(f"Invalid points format: {args.points}. Use comma-separated integers.")
             return
+    
+    # Handle groups from CSV
+    selected_groups = None
+    if args.groups:
+        loaded_groups = load_groups_from_csv()
+        if loaded_groups:
+            try:
+                group_names = [name.strip() for name in args.groups.split(',')]
+                selected_groups = []
+                all_points = set()
+                
+                for group_name in group_names:
+                    if group_name in loaded_groups:
+                        selected_groups.append(group_name)
+                        all_points.update(loaded_groups[group_name])
+                    else:
+                        print(f"Warning: Group '{group_name}' not found in CSV file")
+                
+                if all_points:
+                    custom_points = sorted(list(all_points))
+                    track_features = ['groups']  # Special marker for loaded groups
+                    print(f"Loaded groups: {', '.join(selected_groups)} ({len(custom_points)} total points)")
+                else:
+                    print("No valid groups found")
+            except Exception as e:
+                print(f"Error processing groups: {e}")
+        else:
+            print("Could not load groups from CSV file")
     
     if args.track_all or (not track_features and not custom_points):
         track_features = ['all']  # Special case for all landmarks
@@ -587,8 +622,10 @@ def main():
     detector = vision.FaceLandmarker.create_from_options(options)
     
     print(f"Starting face tracking at {width}x{height} resolution")
-    if custom_points:
-        print(f"Tracking custom points: {custom_points}")
+    if selected_groups:
+        print(f"Tracking groups: {', '.join(selected_groups)} ({len(custom_points)} points)")
+    elif custom_points:
+        print(f"Tracking custom points: {len(custom_points)} points")
     else:
         print(f"Tracking features: {', '.join(track_features)}")
     if WINDOW_DRAGGING_SUPPORTED:
